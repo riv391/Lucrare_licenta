@@ -1,0 +1,5 @@
+#ifndef WRITEDATABYIDENTIFIERSERVICE_H_
+#define WRITEDATABYIDENTIFIERSERVICE_H_
+#include "General_Types.h"
+
+#endif

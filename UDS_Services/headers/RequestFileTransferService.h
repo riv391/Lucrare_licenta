@@ -1,0 +1,5 @@
+#ifndef REQUESTFILETRANSFERSERVICE_H_
+#define REQUESTFILETRANSFERSERVICE_H_
+#include "General_Types.h"
+
+#endif

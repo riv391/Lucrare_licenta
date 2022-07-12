@@ -1,0 +1,346 @@
+#include "../headers/NegativeResponseCodes.h"
+#include "../headers/ReadDTCInformation.h"
+
+// Pentru detalii despre aceste variabile vezi (259 of 480)
+BYTE DTCStatusMask, // Masca de la client, trimisa catre server pentru a filtra doar serviciile suportate de server
+	DTCSnapshotRecordNumber, 
+	DTCStoredDataRecordNumber, 
+	DTCExtDataRecordNumber, 
+	FunctionalGroupIdentifier, 
+	DTCSeverityMask, 
+	DTCReadinessGroupIdentifier, 
+	MemorySelection,
+	UserDefDTCSnapshotRecordNumber;
+
+BYTE DTCSAM; // DTCStatusAvailabilityMask, masca a serverului ce indica serviciile suportate de acesta
+
+DTCFormatIdentifierType DTCFID;
+
+WORD DTCCount;
+
+DTCRecord DTCMaskRecord;
+BYTE DTCCount[2];
+
+int RequestService(A_Data* msg, Bool suppress, BYTE sf) { 
+	if (!msg)
+		msg = (A_Data*)malloc(sizeof(A_Data));
+
+
+	if (sf == RNODTCBSM || sf == RDTCBSM || sf == RDTCSDBRN || sf == RDTCEDI) {
+		if (!msg->data)
+			msg->data = (BYTE*)malloc(3 * sizeof(BYTE));
+
+		msg->data[2] = 
+			DTCStatusMask * (sf == RNODTCBSM || sf == RDTCBSM) +
+		       	DTCStoredDataRecordNumber * (sf = RDTCSDBRN) + 
+			DTCExtDataRecordNumber * (sf == RDTCEDI) +
+			FunctionalGroupIdentifier * (sf == RWWHOBDDTCWPS); // TODO: Trebuie definit DTCStatusMask si DTCStoredDataRecordNumber
+	}
+
+	if (sf == RDTCSSI || sf == RDTCSSBDTC || sf == RDTCEDRBDN || sf == RDTCEDRBR || sf == RSIODTC) {
+		if (!msg->data)
+			msg->data = (BYTE*)malloc((6 - (sf == RSIODTC || sf == RWWHOBDDTCBMR) + (sf == RUDMDTCSSBDTC || RUDMDTCEDRBDN)) * sizeof(BYTE));
+
+		if (sf != RWWHOBDDTCBMR) {
+			msg->data[2] = DTCMaskRecord.DTCHB; // TODO: Trebuie definit DTCMaskRecord
+			msg->data[3] = DTCMaskRecord.DTCMB;
+			msg->data[4] = DTCMaskRecord.DTCLB;
+		} else {
+			msg->data[2] = FunctionalGroupIdentifier;
+			msg->data[3] = DTCStatusMask;
+			msg->data[4] = DTCSeverityMask;
+		}
+
+		if (sf != RSIODTC)
+			msg->data[5] = 
+				DTCSnapshotRecordNumber * (sf == RDTCSSI || sf == RDTCSSBDTC) +
+			       	DTCExtDataRecordNumber * (sf == RDTCEDRBDN || sf == RDTCEDRBR || sf == RUDMDTCEDRBDN) +
+			       	UserDefDTCSnapshotRecordNumber * (sf == RUDMDTCSSBDTC); // TODO: Trebuie definit DTCSnapshotRecordNumber si DTCExtDataRecordNumber si UserDefDTCSnapshotRecordNumber
+
+		if (sf == RUDMDTCSSBDTC || sf == RUDMDTCEDRBDN)
+			msg->data[6] = MemorySelection;
+			
+	}
+
+	if (sf == RNODTCBSMR || sf == RDTCBSMR || sf == RUDMDTCBSM) {
+		if (!msg->data)
+			msg->data = (BYTE*)malloc(4 * sizeof(BYTE));
+
+		if (sf == RNODTCBSMR || sf == RDTCBSMR) {
+			msg->data[2] = DTCSeverityMask;
+			msg->data[3] = DTCStatusMask;
+		}
+
+		if (sf == RUDMDTCBSM) {
+			msg->data[2] = DTCStatusMask;
+			msg->data[3] = MemorySelection;
+		}
+
+		if (sf == RDTCBSMR) {
+			msg->data[2] = FunctionalGroupIdentifier;
+			msg->data[3] = DTCReadinessGroupIdentifier;
+		}
+
+		//msg->data[2] = 
+		//	DTCSeverityMask * (sf == RNODTCBSMR || sf == RDTCBSMR) +
+		//       	DTCStatusMask * (sf == RUDMDTCBSM) + 
+		//	FunctionalGroupIdentifier * (sf == RDTCBRGI);
+
+		//msg->data[3] = 
+		//	DTCStatusMask * (sf == RNODTCBSMR || sf == RDTCBSMR) +
+		//       	MemorySelection * (sf == RUDMDTCBSM) + 
+		//	DTCReadinessGroupIdentifier * (sf == RDTCBRGI);
+	}
+
+	if (sf == RSUPDTC || sf == RFTFDTC || sf == RFCDTC || sf == RMRTFDTC || sf == RMRCDTC || sf == RDTCFDC || sf == RDTCWPS)
+		if (!msg->data)
+			msg->data = (BYTE*)malloc(2 * sizeof(BYTE));
+
+	msg->data[0] = RDTCI;
+
+	msg->data[1] = sf;
+
+	return 0;
+
+}
+
+int ReceiveResponse(A_Data msg, BYTE sf) { 
+
+	if (msg.data[0] != RDTCIPR)
+		return 1;
+
+	BYTE recv_sf = (msg.data[1] & 0x7f);
+
+	if (recv_sf != sf)
+		return 1;
+
+	// Table 319
+	if (sf == RNODTCBSM || sf == RNODTCBSMR) {
+		DTCSAM = msg.data[2];
+		DTCFID = msg.data[3];
+		DTCCount = ((WORD)msg.data[4] << 8) + msg.data[5];
+	}
+
+	// Table 320
+	if (sf == RDTCBSM || sf == RSUPDTC || sf == RFTFDTC || sf == RFCDTC || sf == RMRTFDTC || sf == RMRCDTC || sf == RDTCWPS) {
+		DTCSAM = msg.data[2];
+		DTCAndStatusRecord* StatusRecords = ExtractStatusAndRecord(msg + 3, (msg->Length - 3) / 4);
+	}
+
+	// Table 321
+	if (sf == RDTCSSI) {
+		DTCRecord* Records = (DTCRecord*)malloc((msg->Length - 3) * sizeof(DTCRecord) / 4);
+		BYTE* DTCSnapshotRecordNbr = (BYTE)malloc((msg->Length - 3) * sizeof(BYTE) / 4);
+		for (unsigned int i = 0; i < (msg->Length - 3) / 4; ++i) {
+			Records[i].DTCHB = msg.data[3 + i * 4];
+			Records[i].DTCMB = msg.data[3 + i * 4 + 1];
+			Records[i].DTCLB = msg.data[3 + i * 4 + 2];
+			DTCSnapshotRecordNbr[i] = msg.data[3 + i * 4 + 3];
+		}
+	}
+
+	// Table 322
+	if (sf == RDTCSSBDTC) {
+		DTCAndStatusRecord StatusRecord;
+		StatusAndRecord.DTCHB = msg.data[3];
+		StatusAndRecord.DTCMB = msg.data[4];
+		StatusAndRecord.DTCLB = msg.data[5];
+		StatusAndRecord.SODTC = msg.data[6];
+		DTCSnapshotRecord* Snapshot = ExtractSnapshotRecord(msg + 7, msg->Length - 7);
+	}
+
+	// Table 323
+	if (sf == RDTCSDBRN) {
+		BYTE DTCSDRN = msg.data[2];
+		DTCAndStatusRecord Record;
+		Record.DTCHB = msg.data[3];
+		Record.DTCMB = msg.data[4];
+		Record.DTCLB = msg.data[5];
+		Record.SODTC = msg.data[6];
+		BYTE DTCSDRNI = msg.data[7];
+		DTCSnapshotRecord* Snapshot = ExtractRecord(msg + 8, msg->Length - 8);
+	}
+
+	// Table 324
+	if (sf == RDTCEDRBDN) {
+		DTCAndStatusRecord Record;
+		Record.DTCHB = msg.data[3];
+		Record.DTCMB = msg.data[4];
+		Record.DTCLB = msg.data[5];
+		Record.SODTC = msg.data[6];
+		BYTE DTCEDRN = msg.data[7];
+		BYTE* ExtendedRecord = ExtractExtendedDataRecord(msg + 8, msg->Length - 8);
+	}
+
+	// Table 325
+	if (sf == RDTCBSMR || sf == RSIODTC) {
+		BYTE DTCSAM = msg.data[3];
+		DTCAndSeverityRecord* SeverityRecord = ExtractSeverityAndRecord(msg + 4, (msg->Length - 4) / 6);
+	}
+
+	// Table 326
+	if (sf == RDTCFDC)
+		DTCFaultDetectionCounterRecord* ExtractFaultDetectionCounterRecord(msg + 3, (msg->Length - 3) / 4);
+
+	// Table 327
+	if (sf == RDTCEDRBR) {
+		BYTE DTCEDRN = msg.data[3];
+		DTCAndStatusRecord Record;
+		Record.DTCHB = msg.data[4];
+		Record.DTCMB = msg.data[5];
+		Record.DTCLB = msg.data[6];
+		Record.SODTC = msg.data[7];
+		BYTE* ExtendedRecord = ExtractExtendedDataRecord(msg + 8, msg->Length - 8);
+	}
+
+	// Table 328
+	if (sf == RUDMDTCBSM) {
+		BYTE MEMYS = msg.data[3];
+		BYTE DTCSAM = msg.data[4];
+		DTCAndStatusRecord* Records = ExtractStatusAndRecord(msg + 5, (msg->Length - 5) / 3);
+	}
+
+	// Table 329
+	if (sf == RUDMDTCSSBDTC) {
+		BYTE MEMYS = msg.data[3];
+		DTCAndStatusRecord Record;
+		Record.DTCHB = msg.data[4];
+		Record.DTCMB = msg.data[5];
+		Record.DTCLB = msg.data[6];
+		Record.SODTC = msg.data[7];
+		BYTE UDDTCSSRN = msg.data[8];
+		BYTE DTCSSRNI = msg.data[9];
+		DTCSnapshotRecord* Snapshot = ExtractSnapshotRecord(msg + 10, msg->Length - 10);
+	}
+
+	// Table 330
+	if (sf == RUDMDTCEDRBDN) {
+		BYTE MEMYS = msg.data[3];
+		DTCAndStatusRecord Record;
+		Record.DTCHB = msg.data[4];
+		Record.DTCMB = msg.data[5];
+		Record.DTCLB = msg.data[6];
+		Record.SODTC = msg.data[7];
+		BYTE DTCEDRN = msg.data[8];
+		BYTE* ExtendedRecord = ExtractExtendedDataRecord(msg + 9, msg->Length - 9);
+	}
+
+	// Table 331
+	if (sf == RDTCEDI) {
+		BYTE DTCSAM = msg.data[3];
+		BYTE DTCEDRN = msg.data[4];
+		DTCAndStatusRecord* Records = ExtractStatusAndRecord(msg + 5, (msg->Length - 5) / 4);
+	}
+
+	// Table 332
+	if (sf == RWWHOBDDTCBMR) {
+		BYTE FGID = msg.data[3];
+		BYTE DTCSAM = msg.data[4];
+		BYTE DTCSVAM = msg.data[5];
+		DTCFormatIdentifierType DTCFID = msg.data[6];
+		DTCAndSeverityRecord* SeverityRecord = ExtractSeverityAndRecord(msg + 7, (msg->Length - 7) / 5);
+	}
+
+	// Table 333
+	if (sf == RWWHOBDDTCWPS) {
+		BYTE FGID = msg.data[3];
+		BYTE DTCSAM = msg.data[4];
+		DTCFormatIdentifierType DTCFID = msg.data[5];
+		DTCAndStatusRecord* Records = ExtractStatusAndRecord(msg + 6, (msg->Length - 6) / 4);
+	}
+	
+	// Table 334
+	if (sf == RDTCBRGI) {
+		BYTE FGID = msg.data[3];
+		BYTE DTCAM = msg.data[4];
+		DTCFormatIdentifierType DTCFID = msg.data[5];
+		BYTE RGI = msg.data[6];
+		DTCAndStatusRecord* Records = ExtractStatusAndRecord(msg + 7, (msg->Length - 7) / 4);
+	}
+
+	return 0;
+}
+
+DTCRecord* ExtractRecord(A_Data msg, unsigned int count) {
+
+	DTCRecord* res = (DTCRecord*)malloc(count * sizeof(DTCRecord));
+
+	for (unsigned int i = 0; i < count; ++i) {
+		res[i].DTCHB = *(msg + i * 3);
+		res[i].DTCMB = *(msg + i * 3 + 1);
+		res[i].DTCLB = *(msg + i * 3 + 2);
+	}
+
+	return res;
+}
+
+// Deoarece nu stiu lungimile raspunsurilor voi primi doar o pereche de identificatori si o singura lista de valori
+DTCSnapshotRecord* ExtractSnapshotRecord(Byte* msg, unsigned int count) {
+	DTCSnapshotRecord* res = (DTCSnapshotRecord*)malloc(sizeof(DTCSnapshotRecord));
+
+	res->snapshotData = (BYTE*)malloc((count - 2) * sizeof(BYTE));
+
+	// identificatorul
+	res->DIDBH = *msg;
+
+	res->DIDBL = *(msg + 1);
+
+	for (unsigned int i = 2; i < count; res->snapshotData[i - 2] = *(msg + i), ++i);
+		// TODO: Vezi tabel 332
+
+	return res;
+}
+
+// Analog DTCSnapshotRecord pentru DTCStoredDataRecord (vezi tabel 323)
+
+BYTE* ExtractExtendedDataRecord (Byte* msg, unsigned int count) {
+	BYTE* res = (BYTE*)malloc(count * sizeof(BYTE));
+
+	memcpy(res, msg, count * sizeof(BYTE));
+
+	return res;
+}
+
+DTCAndStatusRecord* ExtractStatusAndRecord(A_Data msg, unsigned int count) {
+
+	DTCAndStatusRecord* res = (DTCAndStatusRecord*)malloc(count * sizeof(DTCAndStatusRecord));
+
+	for (unsigned int i = 0; i < count; ++i) {
+		res[i].record.DTCHB = *(msg + i * 4);
+		res[i].record.DTCMB = *(msg + i * 4 + 1);
+		res[i].record.DTCLB = *(msg + i * 4 + 2);
+		res[i].SODTC = *(msg + i * 4 + 3);
+	}
+
+	return res;
+}
+
+DTCAndSeverityRecord* ExtractSeverityAndRecord(A_Data msg, unsigned int count) {
+
+	DTCAndSeverityRecord* res = (DTCAndSeverityRecord*)malloc(count * sizeof(DTCAndSeverityRecord));
+
+	for (unsigned int i = 0; i < count; ++i) {
+		res[i].DTCS = *(msg + i * 6);
+		res[i].DTCFU = *(msg + i * 6 + 1);
+		res[i].StatusAndRecord.record.DTCHB = *(msg + i * 6 + 2);
+		res[i].StatusAndRecord.record.DTCMB = *(msg + i * 6 + 3);
+		res[i].StatusAndRecord.record.DTCLB = *(msg + i * 6 + 4);
+		res[i].StatusAndRecord.SODTC = *(msg + i * 6 + 5);
+	}
+
+	return res;
+
+}
+
+DTCFaultDetectionCounterRecord* ExtractFaultDetectionCounterRecord(BYTE *msg, unsigned int counter) {
+	DTCFaultDetectionCounterRecord* res = (DTCFaultDetectionCounterRecord*)malloc(counter * sizeof(DTCFaultDetectionCounterRecord));
+
+	for (unsigned int i = 0; i < counter; ++i) {
+		res[i].record.DTCHB = *(msg + i * 4);
+		res[i].record.DTCMB = *(msg + i * 4 + 1);
+		res[i].record.DTCLB = *(msg + i * 4 + 2);
+		res[i].DTCFDC = *(msg + i * 4 + 3);
+	}
+
+	return res;
+}

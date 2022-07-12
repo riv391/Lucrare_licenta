@@ -1,0 +1,5 @@
+#ifndef WRITEMEMORYBYADDRESSSERVICE_H_
+#define WRITEMEMORYBYADDRESSSERVICE_H_
+#include "General_Types.h"
+
+#endif

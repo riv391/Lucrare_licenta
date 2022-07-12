@@ -1,0 +1,5 @@
+#ifndef ACCESSTIMINGPARAMETERSERVICE_H_
+#define ACCESSTIMINGPARAMETERSERVICE_H_
+#include "General_Types.h"
+
+#endif
